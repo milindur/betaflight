@@ -22,8 +22,11 @@
  * Author: jflyper@github.com
  */
 
+#include <stdlib.h>
+
 #include "common/utils.h"
 #include "common/printf.h"
+#include "common/time.h"
 
 #include "emfat.h"
 #include "emfat_file.h"
@@ -268,15 +271,43 @@ emfat_t emfat;
 
 static void emfat_add_log(emfat_entry_t *entry, int number, uint32_t offset, uint32_t size)
 {
+    uint32_t firstStartTime = CMA_TIME;
+#ifdef USE_RTC_TIME
+    char buffer[20];
+
+    // Search for the header entry 'Log start datetime' (only in the first block of the log)
+    // XXX 2048 = FREE_BLOCK_SIZE in io/flashfs.c
+    for (uint32_t searchOffset = offset; searchOffset < offset + 2048; searchOffset++) {
+        flashfsReadAbs(searchOffset, (uint8_t *)buffer, 20);
+        if (strncmp(buffer, "H Log start datetime", 20) == 0) {
+            // We assume the format to be based on ISO8601 as specified in time.c:
+            // yyyy-MM-ddThh:mm:ss
+            memset(buffer, 0, 20);
+            flashfsReadAbs(searchOffset + 21, (uint8_t *)buffer, 19);
+            uint32_t year = atoi(buffer);
+            // emfat requires the year to be >= 1980
+            if (year >= 1980) {
+                uint32_t month = atoi(buffer + 5);
+                uint32_t day = atoi(buffer + 8);
+                uint32_t hours = atoi(buffer + 11);
+                uint32_t minutes = atoi(buffer + 14);
+                uint32_t seconds = atoi(buffer + 17);
+                firstStartTime = EMFAT_ENCODE_CMA_TIME(day, month, year, hours, minutes, seconds);
+            }
+            break;
+        }
+    }
+#endif
+
     tfp_sprintf(logNames[number], "BTFL_%03d.BBL", number);
     entry->name = logNames[number];
     entry->level = 1;
     entry->offset = offset;
     entry->curr_size = size;
     entry->max_size = entry->curr_size;
-    entry->cma_time[0] = CMA_TIME;
-    entry->cma_time[1] = CMA_TIME;
-    entry->cma_time[2] = CMA_TIME;
+    entry->cma_time[0] = firstStartTime;
+    entry->cma_time[1] = firstStartTime;
+    entry->cma_time[2] = firstStartTime;
     entry->readcb = bblog_read_proc;
 }
 
